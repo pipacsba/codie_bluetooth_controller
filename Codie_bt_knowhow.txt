@@ -1,0 +1,144 @@
+# Codie communicates with a custom binary protocol. All fields and data is little-endian.
+# Little-endian means for example: 18 = 0x12, but on two bytes it will be 0x12 0x00 (so the first byte is the low, and
+# the second is the high one!)
+#
+# The communication takes place among three nodes:
+# App: The application which can be a mobile app on a mobile platform, a PC program� anything which is in the
+# central BLE role, connecting to Codie.
+# BLE: The BLE module inside Codie. There are special commands that can be executed only by the BLE module.
+# MCU: The host microcontroller unit in Codie, executing the majority of the commands.
+#
+# The packet structure is as follows:
+# INFO[8] SEQ[16] CMD[16] ARGLEN[16] ARGDAT[n]
+# field purpose
+# INFO - Packet information. (see details later)
+# SEQ - Sequence number. A 16-bit packet counter. Used for sorting and acknowledge/reply identification.
+# CMD - Command ID. 16-bit command ID.
+# ARGLEN - Argument length. For each command, there can be one argument starting with a 16bit length field.
+# ARGDAT - Argument data. Data accompanying the command (command specific structure).
+
+# INFO: ROUTE + PRIO
+# ROUTE: DESTINATION + SENDER
+# 00 = APP, 01 = MCU, 10 = BLE. e.g. APP -> MCU = 0100 = 0x4, APP -> BLE = 1000 = 0x8
+# PRIO: The four PRIO bits specify the priority of the packet. Currently only the most significant bit (P3) is
+# used:
+# if P3=0, the packet gets queued in the normal queue, if P3=1, the packet goes to the priority queue. Packets in
+# the priority queue are executed first.
+# E.g. normal prio = 0x0, high prio = 0x8
+
+# SEQ The packet sequence number is a 16bit unsigned integer.
+# Currently this seq number is not used in any way except in the replies (so a reply can be assigned to its
+# original command).
+
+# ARG The argument starts with the 16bit ARGLEN argument length in bytes, followed by the argument data. The data
+# structure is command specific.
+
+# Each command has a 16bit ID. The commands are grouped to four groups:
+# General commands, which can be executed by any of the nodes.
+# MCU commands can be executed only on the MCU.
+# BLE commands can be executed only on the BLE module.
+# App commands can be executed by the client application.
+
+# INFO: ROUTE+PRIO (8 bits)
+# byte info = getInfoByte(cmd.getSender(), cmd.getDestination(), false);
+# dataPackage[packageLength++] = info;
+# SEQ (16 bits)
+# int seq = getNextSequenceNumber();
+# dataPackage[packageLength++] = (byte) (seq & 0x00FF);
+# dataPackage[packageLength++] = (byte) ((seq & 0x0FF00) >> 8);
+# CMD (16 bits)
+# int cmdId = cmd.getCommandType().getCommandId();
+# dataPackage[packageLength++] = (byte) (cmdId & 0x00FF);
+# dataPackage[packageLength++] = (byte) ((cmdId & 0x0FF00) >> 8);
+# ARGLEN (16 bits)
+# dataPackage[packageLength++] = (byte) (argLen & 0x00FF);
+# dataPackage[packageLength++] = (byte) ((argLen & 0x0FF00) >> 8);
+# ARGDAT - see addArgument
+
+
+
+
+# --------- MCU COMMANDS ------------------
+# case 0x1060:
+#    CodieCommandType.DriveSpeed;
+#  * Set motor speeds to the given value in percents (0-100%).
+#  * Speed values are signed, negative value means backwards.
+#  * Replies: Successful: 0 means command has been successfully executed, any other value means error. 
+#      Busy call behavior: execution ends immediately, the command is acked, and then the new command starts executing.
+#    request.addArgument(leftSpeed, ArgumentType.I8); # leftSpeed
+#    request.addArgument(rightSpeed, ArgumentType.I8); # rightSpeed
+#  Example command (can't explain by the above information):
+#        Info  Seq     CMD     ArgLen  ArgDat
+#        40    0007    1060    0002    00:00
+#        40:07:00:60:10:02:00:00:00
+
+# case 0x1061:
+#    CodieCommandType.DriveDistance;
+#  * Set motor speeds to the given value in percents (0-100%).
+#  * Move a specified amount of distance (in mm) with given speeds (in percentage 0-100%).<br/>
+#  * Moving backwards can be done with negative speeds.<br/>
+#  * Currently both of Codie�s tracks will travel the given distance, so covering arcs by specifying different speeds will not yield results as intended� Later we
+#  * probably will improve this behavior so that distance will mean the length of trajectory of the center of the robot while following an arc.
+#  * Replies: Successful, 0 means command has been successfully executed, any other value means error.
+#    private int handleDriveDistance(final byte[] dataPackage) {
+#    TODO get distance[u16](mm), speedLeft[i8](%), speedRight[i8](%)
+#    TODO handle virtual map where mock Codie can move
+#      Busy call behavior: execution ends immediately, the command is ncked, and then the new command starts executing.
+#   request.addArgument(distance, ArgumentType.U16);
+#   request.addArgument(leftSpeed, ArgumentType.I8); # leftSpeed
+#   request.addArgument(rightSpeed, ArgumentType.I8); # rightSpeed
+
+
+# case 0x1062:
+#    CodieCommandType.DriveTurn;
+#    private int handleDriveTurn(final byte[] dataPackage) {
+#    TODO get degree u16 and speed i8
+#    TODO handle virtual map where mock codie can move
+#  * Set motor speeds to the given value in percents (0-100%).
+#  * ID: 0x1062<br/>
+#  * ARG: degree[u16](�), speed[i8](%)<br/>
+#  * ReARG: nSuccessful[u8]<br/>
+#  * This command makes the robot turn given degrees in one place, by starting the tracks in different directions with given speed. 
+#  * Pozitive speeds turns left, negative speed turns right.
+#  * Replies: nSuccessful: 0 means command has been successfully executed, any other value means error.
+#  * Busy call behavior: execution ends immediately, the command is nacked, and then the new command starts executing.
+#    request.addArgument(degree, ArgumentType.U16);
+#    request.addArgument(speed, ArgumentType.I8);
+
+# case 0x1063:
+#    CodieCommandType.SonarGetRange;
+
+# case 0x1064:
+#    CodieCommandType.SpeakBeep;
+
+# case 0x1065:
+#    CodieCommandType.LedSetColor;
+#    TODO ledMask[u16], hue[u8], saturation[u8], value[u8]
+#    LedMask can be used to set leds one-by-one. If Data Length is shorter by this parameter, sets all leds the same way
+#    Example command (can't explain by the above information):
+#        Info  Seq     CMD     ArgLen  ArgDat
+#         40   0000    1065    0005    ff:ff:3f:ff:ff
+#         40:00:00:65:10:05:00:ff:ff:3f:ff:ff
+Startup: 20, 20, 20
+Programming: 80, 20, 250
+Play: 160, 20, 220
+
+
+# case 0x1069:
+#    CodieCommandType.BatteryGetSoc;
+#        Battery read example
+#        Info  Seq     CMD     ArgLen  ArgDat
+#         40   0000    1069    0002    00:00
+#              value: [0x40, 0x00, 0x00, 0x69, 0x10, 0x02, 0x00, 0x00, 0x00]
+#        Battery response example:     
+#        Info  Seq     CMD     ArgLen  ArgDat
+#         10   0001    9069    0003    00:00:5d
+
+
+# case 0x106a:
+#    CodieCommandType.LightSenseGetRaw;
+# case 0x106b:
+#    CodieCommandType.LineGetRaw;
+# case 0x106c:
+#    CodieCommandType.MicGetRaw;
+

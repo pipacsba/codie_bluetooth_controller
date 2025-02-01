@@ -1,0 +1,650 @@
+# Service UUID: 0x1800
+#  start_handle: 0x1  end_handle: 0x7
+# Service UUID: 0x1801
+#  start_handle: 0x8  end_handle: 0xb
+# Service UUID: 52AF0001-978A-628D-C845-0A104CA2B8DD
+#  characteristic 52AF0002-978A-628D-C845-0A104CA2B8DD, handle 0x11, properties 0xc
+
+#	CODIE_BLE_SERVICE_UUID = "52af0001978a628dc8450a104ca2b8dd";
+#	In this service there are two characteristics:
+#	    CODIE_RX_CHARACTERISTICS = "52af0002978a628dc8450a104ca2b8dd";
+#	          Codie receives commands through this characteristic. It is readable and writeable (write without response).
+#	          Be aware, that only 20 bytes can be written at a time (due to the BLE packet payload limit).
+#	    CODIE_TX_CHARACTERISTICS = "52af0003978a628dc8450a104ca2b8dd";
+
+# Battery ID: 0x1069
+#   ReARG: stateOfCharge[u8](%)
+#   Get the state of charge of the battery in percentage 0-100%.
+#   Replies: stateOfCharge: 0-100% the state of charge of the battery
+
+# Light   ID: 0x106a
+#   ReARG: lightValue[u16]
+#   Get a reading from the light sensor.
+#   Replies: lightValue: A raw reading from the light sensor. The value is measured by ADC on 12 bits, so this can be 0-4096, 0 meaining the brightest and 4095 the darkest light.
+
+# Line:   ID: 0x106b
+#   ARG: none
+#   ReARG: valueLeft[u16], valueRight[u16]
+#   Get a reading from the line sensor. The line sensors on the bottom of Codie are simple infrared reflective optical sensors.
+#   Replies: valueLeft, valueRight: Raw 12bit values from the ADC.
+
+# Mic     ID: 0x106c
+#   ReARG: value[u16]
+#   Get a reading from the microphone.
+#   Replies: value: Raw value ranging from 0 to about 2048. Several measurements are averaged into one value, the window of averaging is about 50ms.
+
+# Sonar:  ID: 0x1063
+#   ReARG: range[u16](mm)
+#   Request a range measurement with the sonar sensor. The measurement takes time (depends on how far there is a surface in front of Codie), from ~10ms up to 60ms.
+#   Replies: range: the measured distance by the sonar in mm. 0 means error.
+#   Busy call behavior: requests are queued, however you should NOT request a measurement until the reply arrives for the previous request, because the command queue might get jammed
+
+
+
+substitutions:
+  codieUUID:                       52AF0001-978A-628D-C845-0A104CA2B8DD
+  rx_charUUID:                     52af0002-978a-628d-c845-0a104ca2b8dd
+  tx_charUUID:                     52af0003-978a-628d-c845-0a104ca2b8dd
+
+esphome:
+  name: codie-bt
+  friendly_name: Codie-bt
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: arduino
+
+#ESP32_BLE MAC address: 58:CF:79:E3:89:46
+
+debug:
+
+# Enable logging
+logger:
+  #level: VERBOSE
+  level: INFO
+
+# Enable Home Assistant API
+api:
+
+
+ota:
+  - platform: esphome
+#    password: "8d59550c93acf32fa9af41af1458e230"
+
+wifi:
+  #use_address: 192.168.17.132
+  networks:
+  - ssid: !secret wifi_ssid
+    password: !secret wifi_password
+    manual_ip:
+      static_ip: 192.168.17.31
+      gateway: 192.168.17.1
+      subnet: 255.255.255.0
+      dns1: 192.168.17.1
+  - ssid: !secret wifi_ssid_backup
+    password: !secret wifi_password
+    manual_ip:
+      static_ip: 192.168.17.31
+      gateway: 192.168.17.1
+      subnet: 255.255.255.0
+      dns1: 192.168.17.1
+  ap:
+    ssid: "Codie controller fallback"
+    password: !secret wifi_password
+  domain: .lan
+
+captive_portal:
+
+esp32_ble_tracker:
+
+globals:
+   - id: msg_count
+     type: uint16_t
+     restore_value: no
+     initial_value: '0'
+   - id: batt_lvl
+     type: uint16_t
+     restore_value: no
+     initial_value: '0'
+   - id: mcu_cmd
+     type: uint16_t
+     restore_value: no
+     initial_value: '0x1069'
+   - id: ble_client_connected
+     type: bool
+     initial_value: 'false'
+   - id: program_steps
+     type: uint16_t
+     restore_value: no
+     initial_value: '0'
+   - id: program_count
+     type: uint16_t
+     restore_value: no
+     initial_value: '0'
+
+ble_client:
+  - mac_address: CF:39:11:7F:CA:F1
+    id: Codie
+    auto_connect: true
+    on_connect:
+      then:
+        - esp32_ble_tracker.stop_scan:
+        - delay: 2s
+        #read out battery percent
+        - lambda: |-
+            id(mcu_cmd) = 0x1069;
+            id(push_bt_command).press();
+        - delay: 0.5s
+        - number.set:
+            id: led_hue
+            value: 20
+        - number.set:
+            id: led_saturation
+            value: 20
+        - lambda: |-
+            id(mcu_cmd) = 0x1065;
+            id(push_bt_command).press();
+        - lambda: |-
+            id(ble_client_connected) = true;
+    on_disconnect:
+      then:
+        - esp32_ble_tracker.start_scan:
+        - lambda: |-
+            id(ble_client_connected) = false;
+            id(msg_count) = 0;
+
+
+sensor:
+  - platform: template
+    id: battery_level
+    name: "Codie battery level"
+    accuracy_decimals: 0
+    lambda: 'return id(batt_lvl);'
+    update_interval: never
+    icon: 'mdi:battery'
+  - platform: ble_client
+    type: characteristic
+    ble_client_id: Codie
+    name: "Codie response handler"
+    id: Codie_response
+    service_uuid: ${codieUUID}
+    characteristic_uuid: ${tx_charUUID}
+    #descriptor_uuid: '1069'
+    accuracy_decimals: 0
+    update_interval: never
+    notify: true
+    icon: 'mdi:bluetooth-transfer'
+    unit_of_measurement: ''
+    lambda: |-
+      uint16_t msg_len = sizeof(x)/sizeof(x[0]) - 1;
+      uint8_t infoByte = x[0];
+      uint16_t seq = ((uint16_t)x[2] << 8) | x[1];
+      id(msg_count) = seq;
+      uint16_t cmd = ((uint16_t)x[4] << 8) | x[3];
+      ESP_LOGD("lambda", "Battery response detected %x", cmd);
+      switch (cmd){
+        case 0x9069:
+          // Battery response
+          ESP_LOGD("lambda", "Battery response is: %x", x.back());
+          //uint8_t a_val = x.back();
+          id(batt_lvl) = (uint16_t)x.back();
+          id(battery_level).publish_state(id(batt_lvl));
+          return 1069;
+          break;
+        case 0x9061:
+          return 1061;
+          break;
+        case 0x9062:
+          return 1062;
+          break;
+        case 0x9065:
+          return 1065;
+          break;
+        }
+      return (float)infoByte;
+
+
+button:
+
+  - platform: template
+    name: Codie change color
+    id: change_color
+    icon: "mdi:palette"
+    on_press:
+      then:
+        - if:
+            condition:
+                switch.is_off: programming_mode
+            then:
+              - script.execute: update_color
+  - platform: template
+    name: Codie send forward
+    id: send_forward
+    icon: "mdi:arrow-up-thick"
+    on_press:
+      then:
+        - if:
+            condition:
+                switch.is_off: programming_mode
+            then:
+              - script.execute: move_forward
+            else:
+              - lambda: |-
+                  std::string str0 = id(program_sequence).state;
+                  str0.push_back('e');
+                  auto call = id(program_sequence).make_call();
+                  call.set_value(str0);
+                  call.perform();
+  - platform: template
+    name: Codie send backwards
+    id: send_backwards
+    icon: "mdi:arrow-down-thick"
+    on_press:
+      then:
+      - if:
+          condition:
+              switch.is_off: programming_mode
+          then:
+              - script.execute: move_backwards
+          else:
+              - lambda: |-
+                  std::string str0 = id(program_sequence).state;
+                  str0.push_back('h');
+                  auto call = id(program_sequence).make_call();
+                  call.set_value(str0);
+                  call.perform();
+  - platform: template
+    name: Codie turn left
+    id: turn_left
+    icon: "mdi:arrow-left-top-bold"
+    # arrow-right-top-bold
+    on_press:
+      then:
+      - if:
+          condition:
+              switch.is_off: programming_mode
+          then:
+              - script.execute: rotate_left
+          else:
+              - lambda: |-
+                  std::string str0 = id(program_sequence).state;
+                  str0.push_back('b');
+                  auto call = id(program_sequence).make_call();
+                  call.set_value(str0);
+                  call.perform();
+  - platform: template
+    name: Codie turn right
+    id: turn_right
+    icon: "mdi:arrow-right-top-bold"
+    # arrow-right-top-bold
+    on_press:
+      then:
+      - if:
+          condition:
+              switch.is_off: programming_mode
+          then:
+              - script.execute: rotate_right
+          else:
+              - lambda: |-
+                  std::string str0 = id(program_sequence).state;
+                  str0.push_back('j');
+                  auto call = id(program_sequence).make_call();
+                  call.set_value(str0);
+                  call.perform();
+  - platform: template
+    name: push_out_bt_command
+    id: push_bt_command
+    internal: True
+    on_press:
+      then:
+        - logger.log: "Button pressed"
+        - ble_client.ble_write:
+            id: Codie
+            service_uuid: ${codieUUID}
+            characteristic_uuid: ${rx_charUUID}
+            # LedSetColor example, turns on two leds qith bright red color
+            # value: [0x40, 0x00, 0x00, 0x65, 0x10, 0x05, 0x00, 0x08, 0x08, 0x3f, 0xff, 0xff]
+            # DriveDistance example (40:00:00:61:10:03:f0:04:04)
+            #value: [0x40, 0x00, 0x00, 0x61, 0x10, 0x03, 0x00, 0x1d, 0x1d, 0x1d]
+            # DriveSpeed example
+            #value: [0x40, 0x00, 0x00, 0x60, 0x10, 0x02, 0x00, 0x08, 0x08]
+            # Battery read example
+            value: !lambda |- 
+                std::vector<unsigned char> msg;
+                //Info byte [u8]
+                msg.push_back( 0x40 );
+
+                //Sequence counter [u16]
+                // dataPackage[packageLength++] = (byte) (seq & 0x00FF);
+                // dataPackage[packageLength++] = (byte) ((seq & 0x0FF00) >> 8);
+                uint16_t seq = id(msg_count);
+                msg.push_back( (uint8_t(seq & 0x00FF)));
+                msg.push_back( (uint8_t((seq & 0x0FF00) >> 8)));
+
+                //Command [u16]
+                uint16_t cmd = id(mcu_cmd);
+
+                switch (cmd){
+                  case 0x1069:
+                    {
+                        // CodieCommandType.BatteryGetSoc;
+                        // Battery read example
+                        //   Info  Seq     CMD     ArgLen  ArgDat
+                        //   40   0000    1069    0002    00:00
+                        //   value: [0x40, 0x00, 0x00, 0x69, 0x10, 0x02, 0x00, 0x00, 0x00]
+                        // Battery response example:     
+                        //   Info  Seq     CMD     ArgLen  ArgDat
+                        //   10   0001    9069    0003    00:00:5d
+                        msg.push_back(0x69);    //CMD low
+                        msg.push_back(0x10);    //CMD high
+                        msg.push_back(0x02);    //ArgLen low
+                        msg.push_back(0x00);    //ArgLen high
+                        msg.push_back(0x00);    //const zero
+                        msg.push_back(0x00);    //const zero
+                        break;
+                    }
+                  case 0x1061:
+                    {
+                        // CodieCommandType.DriveDistance;
+                        // * Set motor speeds to the given value in percents (0-100%).
+                        // * Move a specified amount of distance (in mm) with given speeds (in percentage 0-100%).<br/>
+                        // * Moving backwards can be done with negative speeds.<br/>
+                        // * Currently both of Codie�s tracks will travel the given distance, so covering arcs by specifying different speeds will not yield results as intended� Later we
+                        // * probably will improve this behavior so that distance will mean the length of trajectory of the center of the robot while following an arc.
+                        // * Replies: Successful, 0 means command has been successfully executed, any other value means error.
+                        //   private int handleDriveDistance(final byte[] dataPackage) {
+                        //   TODO get distance[u16](mm), speedLeft[i8](%), speedRight[i8](%)
+                        //   TODO handle virtual map where mock Codie can move
+                        //     Busy call behavior: execution ends immediately, the command is ncked, and then the new command starts executing.
+                        //  request.addArgument(distance, ArgumentType.U16);
+                        //  request.addArgument(leftSpeed, ArgumentType.I8); # leftSpeed
+                        //  request.addArgument(rightSpeed, ArgumentType.I8); # rightSpeed
+                        msg.push_back(0x61);                                      //CMD low
+                        msg.push_back(0x10);                                      //CMD high
+                        msg.push_back(0x04);                                      //ArgLen low
+                        msg.push_back(0x00);                                      //ArgLen high
+                        uint16_t dist = id(codie_distance).state;
+                        msg.push_back( (uint8_t(dist & 0x00FF)));                 //Arg[0] Dist low
+                        msg.push_back( (uint8_t((dist & 0x0FF00) >> 8)));         //Arg[1] Dist high
+                        int8_t spd = id(codie_speed).state;
+                        msg.push_back(spd);                                       //Arg[2] LeftSpeed
+                        msg.push_back(spd);                                       //Arg[3] RightSpeed
+                        break;
+                    }
+                  case 0x1062:
+                    {
+                        // CodieCommandType.DriveTurn;
+                        //   private int handleDriveTurn(final byte[] dataPackage) {
+                        //   TODO get degree u16 and speed i8
+                        //   TODO handle virtual map where mock codie can move
+                        // * Set motor speeds to the given value in percents (0-100%).
+                        // * ID: 0x1062<br/>
+                        // * ARG: degree[u16](�), speed[i8](%)<br/>
+                        // * ReARG: nSuccessful[u8]<br/>
+                        // * This command makes the robot turn given degrees in one place, by starting the tracks in different directions with given speed. 
+                        // * Pozitive speeds turns left, negative speed turns right.
+                        // * Replies: nSuccessful: 0 means command has been successfully executed, any other value means error.
+                        // * Busy call behavior: execution ends immediately, the command is nacked, and then the new command starts executing.
+                        //   request.addArgument(degree, ArgumentType.U16);
+                        //   request.addArgument(speed, ArgumentType.I8);
+                        msg.push_back(0x62);                                      //CMD low
+                        msg.push_back(0x10);                                      //CMD high
+                        msg.push_back(0x03);                                      //ArgLen low
+                        msg.push_back(0x00);                                      //ArgLen high
+                        uint16_t deg = id(codie_turn).state;
+                        msg.push_back( (uint8_t(deg & 0x00FF)));                  //Arg[0] Deg low
+                        msg.push_back( (uint8_t((deg & 0x0FF00) >> 8)));          //Arg[1] Deg high
+                        int8_t tspd = id(codie_speed).state;
+                        msg.push_back(tspd);                                      //Arg[2] Speed
+                        break;
+                    }
+                  case 0x1065:
+                    {
+                        // CodieCommandType.LedSetColor;
+                        //   TODO ledMask[u16], hue[u8], saturation[u8], value[u8]
+                        //   LedMask can be used to set leds one-by-one. If Data Length is shorter by this parameter, sets all leds the same way
+                        //   Example command:
+                        //       Info  Seq     CMD     ArgLen  ArgDat
+                        //        40   0000    1065    0005    ff:ff:3f:ff:ff
+                        msg.push_back(0x65);                                      //CMD low
+                        msg.push_back(0x10);                                      //CMD high
+                        msg.push_back(0x05);                                      //ArgLen low
+                        msg.push_back(0x00);                                      //ArgLen high
+                        msg.push_back(0xff);                                      //Arg[0] LedMask low
+                        msg.push_back(0xff);                                      //Arg[1] LedMask high
+                        msg.push_back(id(led_hue).state);                         //Arg[2] Hue
+                        msg.push_back(id(led_saturation).state);                  //Arg[3] Saturation
+                        msg.push_back(id(led_light).state);                       //Arg[4] Lightness
+                        break;
+                    }
+                  }
+                return msg;
+  - platform: template
+    name: Codie start program
+    id: start_rpogram
+    icon: "mdi:bug-play"
+    on_press:
+      then:
+        - if:
+            condition:
+                switch.is_on: programming_mode
+            then:
+              - lambda: |-
+                 ESP_LOGD("lambda", "Program started");
+              # change color showing that auto processing is ongoing
+              - number.set:
+                  id: led_hue
+                  value: 160
+              - number.set:
+                  id: led_saturation
+                  value: 220
+              - lambda: |-
+                  id(mcu_cmd) = 0x1065;
+                  id(push_bt_command).press();
+              # define how many stepes are requested
+              - lambda: |-
+                  ESP_LOGD("lambda", "Stepping through the program");
+                  std::string str0 = id(program_sequence).state;
+                  id(program_steps) = str0.length();
+                  id(program_count) = 0;
+              # step through the progam
+              - while:
+                  condition:
+                      lambda: |-
+                        return (id(program_steps) != id(program_count));
+                  then:
+                  - lambda: |-
+                      std::string str0 = id(program_sequence).state;
+                      char c = str0[id(program_count)];
+                      if (c == 0x65) // e
+                            {
+                              id(move_forward).execute();
+                            }
+                      else if (c == 0x68) // h
+                            {
+                              id(move_backwards).execute();
+                            }
+                      else if (c == 0x6a) // j
+                            {
+                              id(rotate_right).execute();
+                            }
+                      else if (c == 0x62) // b
+                            {
+                              id(rotate_left).execute();
+                            }
+                      id(program_count) += 1;
+                  - delay: 2s
+                  - lambda: |-
+                      if (!id(programming_mode).state)
+                        id(program_count) = id(program_steps);
+              - number.set:
+                  id: led_hue
+                  value: 80
+              - number.set:
+                  id: led_saturation
+                  value: 250
+              - lambda: |-
+                  id(mcu_cmd) = 0x1065;
+                  id(push_bt_command).press();
+
+number:
+  - platform: template
+    name: "speed request"
+    id: codie_speed
+    optimistic: true
+    min_value: -128
+    max_value: 127
+    initial_value: 20
+    step: 1
+  - platform: template
+    name: "distance request"
+    id: codie_distance
+    optimistic: true
+    min_value: 0
+    max_value: 65535
+    initial_value: 150
+    step: 1
+  - platform: template
+    name: "angle turn request"
+    id: codie_turn
+    optimistic: true
+    min_value: 0
+    max_value: 360
+    initial_value: 90
+    step: 1
+  - platform: template
+    name: "Led Hue"
+    id: led_hue
+    optimistic: true
+    min_value: 0
+    max_value: 255
+    initial_value: 20
+    step: 1
+  - platform: template
+    name: "Led Saturation"
+    id: led_saturation
+    optimistic: true
+    min_value: 0
+    max_value: 255
+    initial_value: 20
+    step: 1
+  - platform: template
+    name: "Led Lightness"
+    id: led_light
+    optimistic: true
+    min_value: 0
+    max_value: 255
+    initial_value: 20
+    step: 1
+
+
+interval:
+  - interval: 5min
+    then:
+      - if:
+          condition:
+            lambda: "return id(ble_client_connected);"
+          then:
+            #read out battery percent
+            - lambda: |-
+                id(mcu_cmd) = 0x1069;
+                id(push_bt_command).press();
+
+switch:
+  - platform: restart
+    name: "Codie_bt Restart"
+  - platform: template
+    name: "Programming mode"
+    id: programming_mode
+    optimistic: True
+    on_turn_on: 
+      then:
+        - number.set:
+            id: led_hue
+            value: 80
+        - number.set:
+            id: led_saturation
+            value: 250
+        - lambda: |-
+            id(mcu_cmd) = 0x1065;
+            id(push_bt_command).press();
+    on_turn_off: 
+      then:
+        - number.set:
+            id: led_hue
+            value: 20
+        - number.set:
+            id: led_saturation
+            value: 20
+        - lambda: |-
+            id(mcu_cmd) = 0x1065;
+            id(push_bt_command).press();
+        - text.set:
+            id: program_sequence
+            value: ""
+
+text:
+  - platform: template
+    name: "Program sequence"
+    id: program_sequence
+    optimistic: true
+    min_length: 0
+    max_length: 100
+    mode: text
+
+script:
+  - id: move_forward
+    then:
+      - lambda: |-
+          id(mcu_cmd) = 0x1061;
+          if (id(codie_speed).state < 0) {
+            int8_t a_spd = id(codie_speed).state;
+            auto call = id(codie_speed).make_call();
+            call.set_value(abs(a_spd));
+            call.perform();
+          }
+          id(push_bt_command).press();
+  - id: move_backwards
+    then:
+      - lambda: |-
+          id(mcu_cmd) = 0x1061;
+          if (id(codie_speed).state > 0) {
+            int8_t a_spd = id(codie_speed).state;
+            auto call = id(codie_speed).make_call();
+            call.set_value(0 - a_spd);
+            call.perform();
+          }
+          id(push_bt_command).press();
+  - id: rotate_left
+    then:
+      - lambda: |-
+          id(mcu_cmd) = 0x1062;
+          if (id(codie_speed).state < 0) {
+            int8_t a_spd = id(codie_speed).state;
+            auto call = id(codie_speed).make_call();
+            call.set_value(abs(a_spd));
+            call.perform();
+          }
+          id(push_bt_command).press();
+  - id: rotate_right
+    then:
+      - lambda: |-
+          id(mcu_cmd) = 0x1062;
+          if (id(codie_speed).state > 0) {
+            int8_t a_spd = id(codie_speed).state;
+            auto call = id(codie_speed).make_call();
+            call.set_value(0 - a_spd);
+            call.perform();
+          }
+          id(push_bt_command).press();
+  - id: update_color
+    then:
+      - lambda: |-
+          id(mcu_cmd) = 0x1065;
+          id(push_bt_command).press();
+  - id: delay_script
+    then:
+      - delay: 1s
+
+
