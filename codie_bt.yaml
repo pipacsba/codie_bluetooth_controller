@@ -1,46 +1,3 @@
-# Service UUID: 0x1800
-#  start_handle: 0x1  end_handle: 0x7
-# Service UUID: 0x1801
-#  start_handle: 0x8  end_handle: 0xb
-# Service UUID: 52AF0001-978A-628D-C845-0A104CA2B8DD
-#  characteristic 52AF0002-978A-628D-C845-0A104CA2B8DD, handle 0x11, properties 0xc
-
-#	CODIE_BLE_SERVICE_UUID = "52af0001978a628dc8450a104ca2b8dd";
-#	In this service there are two characteristics:
-#	    CODIE_RX_CHARACTERISTICS = "52af0002978a628dc8450a104ca2b8dd";
-#	          Codie receives commands through this characteristic. It is readable and writeable (write without response).
-#	          Be aware, that only 20 bytes can be written at a time (due to the BLE packet payload limit).
-#	    CODIE_TX_CHARACTERISTICS = "52af0003978a628dc8450a104ca2b8dd";
-
-# Battery ID: 0x1069
-#   ReARG: stateOfCharge[u8](%)
-#   Get the state of charge of the battery in percentage 0-100%.
-#   Replies: stateOfCharge: 0-100% the state of charge of the battery
-
-# Light   ID: 0x106a
-#   ReARG: lightValue[u16]
-#   Get a reading from the light sensor.
-#   Replies: lightValue: A raw reading from the light sensor. The value is measured by ADC on 12 bits, so this can be 0-4096, 0 meaining the brightest and 4095 the darkest light.
-
-# Line:   ID: 0x106b
-#   ARG: none
-#   ReARG: valueLeft[u16], valueRight[u16]
-#   Get a reading from the line sensor. The line sensors on the bottom of Codie are simple infrared reflective optical sensors.
-#   Replies: valueLeft, valueRight: Raw 12bit values from the ADC.
-
-# Mic     ID: 0x106c
-#   ReARG: value[u16]
-#   Get a reading from the microphone.
-#   Replies: value: Raw value ranging from 0 to about 2048. Several measurements are averaged into one value, the window of averaging is about 50ms.
-
-# Sonar:  ID: 0x1063
-#   ReARG: range[u16](mm)
-#   Request a range measurement with the sonar sensor. The measurement takes time (depends on how far there is a surface in front of Codie), from ~10ms up to 60ms.
-#   Replies: range: the measured distance by the sonar in mm. 0 means error.
-#   Busy call behavior: requests are queued, however you should NOT request a measurement until the reply arrives for the previous request, because the command queue might get jammed
-
-
-
 substitutions:
   codieUUID:                       52AF0001-978A-628D-C845-0A104CA2B8DD
   rx_charUUID:                     52af0002-978a-628d-c845-0a104ca2b8dd
@@ -58,11 +15,12 @@ esp32:
 #ESP32_BLE MAC address: 58:CF:79:E3:89:46
 
 debug:
-
+  update_interval: 60s
+  
 # Enable logging
 logger:
-  #level: VERBOSE
-  level: INFO
+  level: VERBOSE
+  #level: DEBUG
 
 # Enable Home Assistant API
 api:
@@ -70,7 +28,6 @@ api:
 
 ota:
   - platform: esphome
-#    password: "8d59550c93acf32fa9af41af1458e230"
 
 wifi:
   #use_address: 192.168.17.132
@@ -122,6 +79,15 @@ globals:
      type: uint16_t
      restore_value: no
      initial_value: '0'
+   - id: l_speed
+     type: int8_t
+     restore_value: no
+     initial_value: '0'
+   - id: r_speed
+     type: int8_t
+     restore_value: no
+     initial_value: '0'
+
 
 ble_client:
   - mac_address: CF:39:11:7F:CA:F1
@@ -156,11 +122,28 @@ ble_client:
 
 
 sensor:
+  - platform: wifi_signal
+    name: "Codie bt controller RSSI"
+    id: livingroom_clock_rssi_db
+    update_interval: 60s
+    force_update: True
+  - platform: uptime
+    name: Codie bt controller Uptime Sensor
+  - platform: debug
+    free:
+      name: "Codie bt controller ESP32 Heap Free"
+    block:
+      name: "Codie bt controller ESP32 Heap Max Block"
+    loop_time:
+      name: "Codie bt controller ESP32 Loop Time"
+  - platform: internal_temperature
+    name: "Codie bt controller Internal Temperature"
   - platform: template
     id: battery_level
     name: "Codie battery level"
     accuracy_decimals: 0
     lambda: 'return id(batt_lvl);'
+    unit_of_measurement: '%'
     update_interval: never
     icon: 'mdi:battery'
   - platform: ble_client
@@ -367,9 +350,10 @@ button:
                         uint16_t dist = id(codie_distance).state;
                         msg.push_back( (uint8_t(dist & 0x00FF)));                 //Arg[0] Dist low
                         msg.push_back( (uint8_t((dist & 0x0FF00) >> 8)));         //Arg[1] Dist high
-                        int8_t spd = id(codie_speed).state;
-                        msg.push_back(spd);                                       //Arg[2] LeftSpeed
-                        msg.push_back(spd);                                       //Arg[3] RightSpeed
+                        int8_t l_spd = id(l_speed);
+                        int8_t r_spd = id(r_speed);
+                        msg.push_back(l_spd);                                     //Arg[2] LeftSpeed
+                        msg.push_back(r_spd);                                     //Arg[3] RightSpeed
                         break;
                     }
                   case 0x1062:
@@ -395,7 +379,7 @@ button:
                         uint16_t deg = id(codie_turn).state;
                         msg.push_back( (uint8_t(deg & 0x00FF)));                  //Arg[0] Deg low
                         msg.push_back( (uint8_t((deg & 0x0FF00) >> 8)));          //Arg[1] Deg high
-                        int8_t tspd = id(codie_speed).state;
+                        int8_t tspd = (id(codie_turning_speed).state);
                         msg.push_back(tspd);                                      //Arg[2] Speed
                         break;
                     }
@@ -495,8 +479,29 @@ number:
     optimistic: true
     min_value: -128
     max_value: 127
-    initial_value: 20
+    initial_value: 30
+    mode: BOX
     step: 1
+  - platform: template
+    name: "right speed offset"
+    id: codie_speed_right_offset
+    optimistic: true
+    min_value: -10
+    max_value: 10
+    initial_value: 2
+    step: 1 
+    mode: BOX
+    restore_value: True
+  - platform: template
+    name: "turning speed"
+    id: codie_turning_speed
+    optimistic: true
+    min_value: -30
+    max_value: 30
+    initial_value: 5
+    step: 1 
+    mode: BOX
+    restore_value: True
   - platform: template
     name: "distance request"
     id: codie_distance
@@ -505,6 +510,7 @@ number:
     max_value: 65535
     initial_value: 150
     step: 1
+    mode: BOX
   - platform: template
     name: "angle turn request"
     id: codie_turn
@@ -513,6 +519,7 @@ number:
     max_value: 360
     initial_value: 90
     step: 1
+    mode: BOX
   - platform: template
     name: "Led Hue"
     id: led_hue
@@ -521,6 +528,7 @@ number:
     max_value: 255
     initial_value: 20
     step: 1
+    mode: BOX
   - platform: template
     name: "Led Saturation"
     id: led_saturation
@@ -529,6 +537,7 @@ number:
     max_value: 255
     initial_value: 20
     step: 1
+    mode: BOX
   - platform: template
     name: "Led Lightness"
     id: led_light
@@ -537,6 +546,7 @@ number:
     max_value: 255
     initial_value: 20
     step: 1
+    mode: BOX
 
 
 interval:
@@ -603,6 +613,9 @@ script:
             auto call = id(codie_speed).make_call();
             call.set_value(abs(a_spd));
             call.perform();
+            id(l_speed) = id(codie_speed).state;
+            id(r_speed) = id(l_speed) + id(codie_speed_right_offset).state;
+            ESP_LOGV("lambda", "Speed is set as (l, r): %d, %d", id(l_speed), id(r_speed));
           }
           id(push_bt_command).press();
   - id: move_backwards
@@ -614,15 +627,18 @@ script:
             auto call = id(codie_speed).make_call();
             call.set_value(0 - a_spd);
             call.perform();
+            id(l_speed) = id(codie_speed).state;
+            id(r_speed) = id(l_speed) - id(codie_speed_right_offset).state;
+            ESP_LOGV("lambda", "Speed is set as (l, r): %d, %d", id(l_speed), id(r_speed));
           }
           id(push_bt_command).press();
   - id: rotate_left
     then:
       - lambda: |-
           id(mcu_cmd) = 0x1062;
-          if (id(codie_speed).state < 0) {
-            int8_t a_spd = id(codie_speed).state;
-            auto call = id(codie_speed).make_call();
+          if (id(codie_turning_speed).state < 0) {
+            int8_t a_spd = id(codie_turning_speed).state;
+            auto call = id(codie_turning_speed).make_call();
             call.set_value(abs(a_spd));
             call.perform();
           }
@@ -631,9 +647,9 @@ script:
     then:
       - lambda: |-
           id(mcu_cmd) = 0x1062;
-          if (id(codie_speed).state > 0) {
-            int8_t a_spd = id(codie_speed).state;
-            auto call = id(codie_speed).make_call();
+          if (id(codie_turning_speed).state > 0) {
+            int8_t a_spd = id(codie_turning_speed).state;
+            auto call = id(codie_turning_speed).make_call();
             call.set_value(0 - a_spd);
             call.perform();
           }
@@ -647,4 +663,12 @@ script:
     then:
       - delay: 1s
 
-
+text_sensor:
+  - platform: debug
+    device:
+      name: "Codie BT controller ESP32 Device Info"
+    reset_reason:
+      name: "Codie BT controller ESP32 Reset Reason"
+  - platform: wifi_info
+    ssid:
+      name: "Codie BT ESP32 Connected SSID"
