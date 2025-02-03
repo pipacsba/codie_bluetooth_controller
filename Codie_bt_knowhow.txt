@@ -56,8 +56,6 @@
 # ARGDAT - see addArgument
 
 
-
-
 # --------- MCU COMMANDS ------------------
 # case 0x1060:
 #    CodieCommandType.DriveSpeed;
@@ -71,6 +69,7 @@
 #        Info  Seq     CMD     ArgLen  ArgDat
 #        40    0007    1060    0002    00:00
 #        40:07:00:60:10:02:00:00:00
+
 
 # case 0x1061:
 #    CodieCommandType.DriveDistance;
@@ -105,11 +104,27 @@
 #    request.addArgument(degree, ArgumentType.U16);
 #    request.addArgument(speed, ArgumentType.I8);
 
+
 # case 0x1063:
 #    CodieCommandType.SonarGetRange;
+#   * ID: 0x1063
+#   * ARG: none
+#   * ReARG: range[u16](mm)
+#   * Request a range measurement with the sonar sensor. The measurement takes time (depends on how far there is a surface in front of Codie), from ~10ms up to 60ms.
+#   * Replies: range: the measured distance by the sonar in mm. 0 means error.
+#   * Busy call behavior: requests are queued, however you should NOT request a measurement until the reply arrives for the previous request, because the command
+#          queue might get jammed.
+
 
 # case 0x1064:
 #    CodieCommandType.SpeakBeep;
+#   * ID: 0x1064<br/>
+#   * ARG: duration[u16](ms)<br/>
+#   * ReARG: nSuccessful[u8]<br/>
+#   * Play a beep on the speaker. The frequency is fixed, you can only specify the duration in milliseconds.
+#   * Replies: nSuccessful: 0 means command has been successfully executed, any other value means error.
+#   * Busy call behavior: execution ends immediately, the command is nacked, and then the new command starts executing.
+
 
 # case 0x1065:
 #    CodieCommandType.LedSetColor;
@@ -137,8 +152,23 @@ Play: 160, 20, 220
 
 # case 0x106a:
 #    CodieCommandType.LightSenseGetRaw;
+#   * ID: 0x106a<br/>
+#   * ARG: none<br/>
+#   * ReARG: lightValue[u16]
+#   * Get a reading from the light sensor.
+#   * Replies: lightValue: A raw reading from the light sensor. The value is measured by ADC on 12 bits, so this can be 0-4096, 0 meaining the brightest and 4095
+#       the darkest light.
+
+
 # case 0x106b:
 #    CodieCommandType.LineGetRaw;
+#   * ID: 0x106b<br/>
+#   * ARG: none<br/>
+#   * ReARG: valueLeft[u16], valueRight[u16]<br/>
+#   * Get a reading from the line sensor. The line sensors on the bottom of Codie are simple infrared reflective optical sensors.
+#   * Replies: valueLeft, valueRight: Raw 12bit values from the ADC.
+#   Line sensors detect the presence of a black line by emitting infrared (IR) light and detecting the light levels that return to the sensor.
+
 # case 0x106c:
 #    CodieCommandType.MicGetRaw;
 
