@@ -136,7 +136,7 @@ ble_client:
         - delay: 0.3s
         - lambda: |-
             id(mcu_cmd) = 0x1064;
-            id(buzzing).press();
+            id(call_buzzer).execute();
     on_disconnect:
       then:
         - esp32_ble_tracker.start_scan:
@@ -274,6 +274,13 @@ button:
               switch.is_off: programming_mode
           then:
               - script.execute: call_obj_meas
+          else:
+              - lambda: |-
+                  std::string str0 = id(program_sequence).state;
+                  str0.push_back('m');
+                  auto call = id(program_sequence).make_call();
+                  call.set_value(str0);
+                  call.perform();
   - platform: template
     name: Codie change color
     id: change_color
@@ -590,6 +597,10 @@ button:
                       else if (c == 0x73) // s
                             {
                               id(call_buzzer).execute();
+                            }
+                      else if (c == 0x6d) // m
+                            {
+                              id(call_obj_meas).execute();
                             }
                       id(program_count) += 1;
                   - delay: 2s
