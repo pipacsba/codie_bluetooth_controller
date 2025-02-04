@@ -11,20 +11,25 @@ esp32:
   board: esp32-c3-devkitm-1
   framework:
     type: arduino
+#    type: esp-idf
 
 #ESP32_BLE MAC address: 58:CF:79:E3:89:46
 
 debug:
-  update_interval: 60s
+#  update_interval: 60s
   
 # Enable logging
 logger:
-  level: VERBOSE
-  #level: DEBUG
+  #level: VERBOSE
+  level: DEBUG
 
 # Enable Home Assistant API
 api:
 
+#mqtt:
+#  broker: 192.168.17.4
+#  #broker: mqtt.lan
+#  port: 1883
 
 ota:
   - platform: esphome
@@ -51,7 +56,7 @@ wifi:
     password: !secret wifi_password
   domain: .lan
 
-captive_portal:
+#captive_portal:
 
 esp32_ble_tracker:
 
@@ -64,10 +69,18 @@ globals:
      type: uint16_t
      restore_value: no
      initial_value: '0'
+   - id: obj_distance
+     type: uint16_t
+     restore_value: no
+     initial_value: '0'
    - id: mcu_cmd
      type: uint16_t
      restore_value: no
-     initial_value: '0x1069'
+     initial_value: '0'
+   - id: expected_response_cmd
+     type: uint16_t
+     restore_value: no
+     initial_value: '0'
    - id: ble_client_connected
      type: bool
      initial_value: 'false'
@@ -87,7 +100,14 @@ globals:
      type: int8_t
      restore_value: no
      initial_value: '0'
-
+   - id: t_angle
+     type: uint16_t
+     restore_value: no
+     initial_value: '0'
+   - id: correction_angle_needed
+     type: uint16_t
+     restore_value: no
+     initial_value: '0'
 
 ble_client:
   - mac_address: CF:39:11:7F:CA:F1
@@ -113,6 +133,10 @@ ble_client:
             id(push_bt_command).press();
         - lambda: |-
             id(ble_client_connected) = true;
+        - delay: 0.3s
+        - lambda: |-
+            id(mcu_cmd) = 0x1064;
+            id(buzzing).press();
     on_disconnect:
       then:
         - esp32_ble_tracker.start_scan:
@@ -122,22 +146,22 @@ ble_client:
 
 
 sensor:
-  - platform: wifi_signal
-    name: "Codie bt controller RSSI"
-    id: livingroom_clock_rssi_db
-    update_interval: 60s
-    force_update: True
-  - platform: uptime
-    name: Codie bt controller Uptime Sensor
-  - platform: debug
-    free:
-      name: "Codie bt controller ESP32 Heap Free"
-    block:
-      name: "Codie bt controller ESP32 Heap Max Block"
-    loop_time:
-      name: "Codie bt controller ESP32 Loop Time"
-  - platform: internal_temperature
-    name: "Codie bt controller Internal Temperature"
+#   - platform: wifi_signal
+#     name: "Codie bt controller RSSI"
+#     id: livingroom_clock_rssi_db
+#     update_interval: 60s
+#     force_update: True
+#  - platform: uptime
+#    name: Codie bt controller Uptime Sensor
+#  - platform: debug
+#    free:
+#      name: "Codie bt controller ESP32 Heap Free"
+#    block:
+#      name: "Codie bt controller ESP32 Heap Max Block"
+#    loop_time:
+#      name: "Codie bt controller ESP32 Loop Time"
+#   - platform: internal_temperature
+#     name: "Codie bt controller Internal Temperature"
   - platform: template
     id: battery_level
     name: "Codie battery level"
@@ -146,6 +170,14 @@ sensor:
     unit_of_measurement: '%'
     update_interval: never
     icon: 'mdi:battery'
+  - platform: template
+    id: object_distance
+    name: "Codie object distance"
+    accuracy_decimals: 0
+    lambda: 'return id(obj_distance);'
+    unit_of_measurement: 'mm'
+    update_interval: never
+    icon: 'mdi:map-marker-distance'
   - platform: ble_client
     type: characteristic
     ble_client_id: Codie
@@ -165,31 +197,83 @@ sensor:
       uint16_t seq = ((uint16_t)x[2] << 8) | x[1];
       id(msg_count) = seq;
       uint16_t cmd = ((uint16_t)x[4] << 8) | x[3];
-      ESP_LOGD("lambda", "Battery response detected %x", cmd);
+      uint8_t dist_high = 0;
+      uint8_t dist_low = 0;
+      uint16_t an_obj_distance = 0;
+      ESP_LOGD("lambda", "Codie response detected %x", cmd);
       switch (cmd){
         case 0x9069:
           // Battery response
-          ESP_LOGD("lambda", "Battery response is: %x", x.back());
+          //ESP_LOGD("lambda", "Battery response is: %x", x.back());
           //uint8_t a_val = x.back();
           id(batt_lvl) = (uint16_t)x.back();
           id(battery_level).publish_state(id(batt_lvl));
-          return 1069;
           break;
         case 0x9061:
-          return 1061;
+          //DriveDistance response
           break;
         case 0x9062:
-          return 1062;
+          //DriverTurn response
+          break;
+        case 0x9063:
+          //SonarGetRange distance
+          //ToDo
+          dist_high = x.back();
+          dist_low = x[x.size()-2];
+          an_obj_distance = ((uint16_t)dist_high << 8) | dist_low;
+          id(obj_distance) = (uint16_t)an_obj_distance;
+          id(object_distance).publish_state(id(obj_distance));
+          break;
+        case 0x9064:
+          //Buzzer response
           break;
         case 0x9065:
-          return 1065;
+          //LedSetColor response
           break;
         }
-      return (float)infoByte;
+      uint16_t response_ok = 0;
+      if (id(expected_response_cmd) == cmd)
+        {
+          response_ok = 1;
+        }
+      else
+        {
+          response_ok = cmd;
+        }
+      id(expected_response_cmd) = 0;
+      return response_ok;
 
 
 button:
-
+  - platform: template
+    name: Codie make sound
+    id: buzzing
+    icon: "mdi:bullhorn-outline"
+    on_press:
+      then:
+      - if:
+          condition:
+              switch.is_off: programming_mode
+          then:
+              - script.execute: call_buzzer
+          else:
+              - lambda: |-
+                  std::string str0 = id(program_sequence).state;
+                  str0.push_back('s');
+                  auto call = id(program_sequence).make_call();
+                  call.set_value(str0);
+                  call.perform();
+  - platform: template
+    name: Codie measure object_distance
+    id: measure_obj_distance
+    icon: "mdi:map-marker-distance"
+    on_press:
+      then:
+      - if:
+          condition:
+              switch.is_off: programming_mode
+          then:
+              - script.execute: call_obj_meas
   - platform: template
     name: Codie change color
     id: change_color
@@ -325,6 +409,7 @@ button:
                         msg.push_back(0x00);    //ArgLen high
                         msg.push_back(0x00);    //const zero
                         msg.push_back(0x00);    //const zero
+                        id(expected_response_cmd) = 0x9069;
                         break;
                     }
                   case 0x1061:
@@ -338,7 +423,6 @@ button:
                         // * Replies: Successful, 0 means command has been successfully executed, any other value means error.
                         //   private int handleDriveDistance(final byte[] dataPackage) {
                         //   TODO get distance[u16](mm), speedLeft[i8](%), speedRight[i8](%)
-                        //   TODO handle virtual map where mock Codie can move
                         //     Busy call behavior: execution ends immediately, the command is ncked, and then the new command starts executing.
                         //  request.addArgument(distance, ArgumentType.U16);
                         //  request.addArgument(leftSpeed, ArgumentType.I8); # leftSpeed
@@ -354,6 +438,7 @@ button:
                         int8_t r_spd = id(r_speed);
                         msg.push_back(l_spd);                                     //Arg[2] LeftSpeed
                         msg.push_back(r_spd);                                     //Arg[3] RightSpeed
+                        id(expected_response_cmd) = 0x9061;
                         break;
                     }
                   case 0x1062:
@@ -376,11 +461,51 @@ button:
                         msg.push_back(0x10);                                      //CMD high
                         msg.push_back(0x03);                                      //ArgLen low
                         msg.push_back(0x00);                                      //ArgLen high
-                        uint16_t deg = id(codie_turn).state;
+                        uint16_t deg = id(t_angle);
                         msg.push_back( (uint8_t(deg & 0x00FF)));                  //Arg[0] Deg low
                         msg.push_back( (uint8_t((deg & 0x0FF00) >> 8)));          //Arg[1] Deg high
                         int8_t tspd = (id(codie_turning_speed).state);
                         msg.push_back(tspd);                                      //Arg[2] Speed
+                        id(expected_response_cmd) = 0x9062;
+                        break;
+                    }
+                  case 0x1063:
+                    {
+                        //    CodieCommandType.SonarGetRange;
+                        //   * ID: 0x1063
+                        //   * ARG: none
+                        //   * ReARG: range[u16](mm)
+                        //   * Request a range measurement with the sonar sensor. The measurement takes time (depends on how far there is a surface in front of Codie), from ~10ms up to 60ms.
+                        //   * Replies: range: the measured distance by the sonar in mm. 0 means error.
+                        //   * Busy call behavior: requests are queued, however you should NOT request a measurement until the reply arrives for the previous request, because the command
+                        //          queue might get jammed.
+                        msg.push_back(0x63);    //CMD low
+                        msg.push_back(0x10);    //CMD high
+                        msg.push_back(0x02);    //ArgLen low
+                        msg.push_back(0x00);    //ArgLen high
+                        msg.push_back(0x00);    //const zero
+                        msg.push_back(0x00);    //const zero
+                        id(expected_response_cmd) = 0x9063;
+                        break;
+                    }
+                  case 0x1064:
+                    {
+                        // case 0x1064:
+                        //   CodieCommandType.SpeakBeep;
+                        //   * ID: 0x1064<br/>
+                        //   * ARG: duration[u16](ms)<br/>
+                        //   * ReARG: nSuccessful[u8]<br/>
+                        //   * Play a beep on the speaker. The frequency is fixed, you can only specify the duration in milliseconds.
+                        //   * Replies: nSuccessful: 0 means command has been successfully executed, any other value means error.
+                        //   * Busy call behavior: execution ends immediately, the command is nacked, and then the new command starts executing.
+                        msg.push_back(0x64);                                      //CMD low
+                        msg.push_back(0x10);                                      //CMD high
+                        msg.push_back(0x02);                                      //ArgLen low
+                        msg.push_back(0x00);                                      //ArgLen high
+                        uint16_t t_buzz = id(buzzer_duration).state;
+                        msg.push_back( (uint8_t(t_buzz & 0x00FF)));                  //Arg[0] Deg low
+                        msg.push_back( (uint8_t((t_buzz & 0x0FF00) >> 8)));          //Arg[1] Deg high
+                        id(expected_response_cmd) = 0x9064;
                         break;
                     }
                   case 0x1065:
@@ -400,6 +525,7 @@ button:
                         msg.push_back(id(led_hue).state);                         //Arg[2] Hue
                         msg.push_back(id(led_saturation).state);                  //Arg[3] Saturation
                         msg.push_back(id(led_light).state);                       //Arg[4] Lightness
+                        id(expected_response_cmd) = 0x9065;
                         break;
                     }
                   }
@@ -444,10 +570,14 @@ button:
                       if (c == 0x65) // e
                             {
                               id(move_forward).execute();
+                              //id(correction_angle_needed) = 1;
+                              //ESP_LOGD("lambda", "correction needed flag set to 1");
                             }
                       else if (c == 0x68) // h
                             {
                               id(move_backwards).execute();
+                              //id(correction_angle_needed) = 2;
+                              //ESP_LOGD("lambda", "correction needed flag set to 2");
                             }
                       else if (c == 0x6a) // j
                             {
@@ -457,8 +587,48 @@ button:
                             {
                               id(rotate_left).execute();
                             }
+                      else if (c == 0x73) // s
+                            {
+                              id(call_buzzer).execute();
+                            }
                       id(program_count) += 1;
                   - delay: 2s
+                  - if:
+                      #going forward is not really straight unfortunatelly, some correction is needed
+                      condition:
+                          - lambda: |-
+                              //ESP_LOGD("lambda", "correction needed flag is %d", id(correction_angle_needed));
+                              return (id(correction_angle_needed) > 0);
+                      then:
+                        - ble_client.ble_write:
+                            id: Codie
+                            service_uuid: ${codieUUID}
+                            characteristic_uuid: ${rx_charUUID}
+                            value: !lambda |- 
+                                std::vector<unsigned char> msg;
+                                msg.push_back( 0x40 );
+                                uint16_t seq = id(msg_count);
+                                msg.push_back( (uint8_t(seq & 0x00FF)));
+                                msg.push_back( (uint8_t((seq & 0x0FF00) >> 8)));
+                                msg.push_back(0x62);                                      //CMD low
+                                msg.push_back(0x10);                                      //CMD high
+                                msg.push_back(0x03);                                      //ArgLen low
+                                msg.push_back(0x00);                                      //ArgLen high
+                                uint16_t deg = 1;
+                                msg.push_back( (uint8_t(deg & 0x00FF)));                  //Arg[0] Deg low
+                                msg.push_back( (uint8_t((deg & 0x0FF00) >> 8)));          //Arg[1] Deg high
+                                int8_t tspd = 5;  // forward: turn left
+                                if (id(correction_angle_needed) == 2) // forward: turn right
+                                  {
+                                    tspd = -5;
+                                  }
+                                msg.push_back(tspd);                                      //Arg[2] Speed
+                                id(expected_response_cmd) = 0x9062;
+                                id(correction_angle_needed) = 0;
+                                return msg;
+                        - delay: 1s
+                      else:
+                        - lambda: 'ESP_LOGD("lambda", "correction needed flag is found 0");'
                   - lambda: |-
                       if (!id(programming_mode).state)
                         id(program_count) = id(program_steps);
@@ -471,6 +641,10 @@ button:
               - lambda: |-
                   id(mcu_cmd) = 0x1065;
                   id(push_bt_command).press();
+              - delay: 0.1s
+              - lambda: |-
+                  id(mcu_cmd) = 0x1064;
+                  id(buzzing).press();
 
 number:
   - platform: template
@@ -486,8 +660,8 @@ number:
     name: "right speed offset"
     id: codie_speed_right_offset
     optimistic: true
-    min_value: -10
-    max_value: 10
+    min_value: -30
+    max_value: 30
     initial_value: 2
     step: 1 
     mode: BOX
@@ -512,12 +686,21 @@ number:
     step: 1
     mode: BOX
   - platform: template
-    name: "angle turn request"
-    id: codie_turn
+    name: "angle turn request right"
+    id: codie_turn_right
     optimistic: true
     min_value: 0
     max_value: 360
-    initial_value: 90
+    initial_value: 85
+    step: 1
+    mode: BOX
+  - platform: template
+    name: "angle turn request left"
+    id: codie_turn_left
+    optimistic: true
+    min_value: 0
+    max_value: 360
+    initial_value: 84
     step: 1
     mode: BOX
   - platform: template
@@ -547,7 +730,15 @@ number:
     initial_value: 20
     step: 1
     mode: BOX
-
+  - platform: template
+    name: "Buzzer Duration"
+    id: buzzer_duration
+    optimistic: true
+    min_value: 0
+    max_value: 2000
+    initial_value: 300
+    step: 1
+    mode: BOX
 
 interval:
   - interval: 5min
@@ -642,6 +833,7 @@ script:
             call.set_value(abs(a_spd));
             call.perform();
           }
+          id(t_angle) = id(codie_turn_left).state;
           id(push_bt_command).press();
   - id: rotate_right
     then:
@@ -653,6 +845,7 @@ script:
             call.set_value(0 - a_spd);
             call.perform();
           }
+          id(t_angle) = id(codie_turn_right).state;
           id(push_bt_command).press();
   - id: update_color
     then:
@@ -662,13 +855,24 @@ script:
   - id: delay_script
     then:
       - delay: 1s
+  - id: call_buzzer
+    then:
+      - lambda: |-
+          id(mcu_cmd) = 0x1064;
+          id(push_bt_command).press();
+  - id: call_obj_meas
+    then:
+      - lambda: |-
+          id(mcu_cmd) = 0x1063;
+          id(push_bt_command).press();
 
-text_sensor:
-  - platform: debug
-    device:
-      name: "Codie BT controller ESP32 Device Info"
-    reset_reason:
-      name: "Codie BT controller ESP32 Reset Reason"
-  - platform: wifi_info
-    ssid:
-      name: "Codie BT ESP32 Connected SSID"
+
+# text_sensor:
+#   - platform: debug
+#     device:
+#       name: "Codie BT controller ESP32 Device Info"
+#     reset_reason:
+#       name: "Codie BT controller ESP32 Reset Reason"
+#   - platform: wifi_info
+#     ssid:
+#       name: "Codie BT ESP32 Connected SSID"
